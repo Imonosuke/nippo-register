@@ -220,12 +220,10 @@
       try { return localStorage.getItem('nippoKey') || window.__key || ''; } catch (e) { return window.__key || ''; }
     }
 
-    function apiPost(obj) {
-      return fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(obj)
-      }).then(function (r) { return r.json(); });
+    function apiSubmit(payload, id) {
+      var url = API_URL + '?action=submit&key=' + encodeURIComponent(getKey()) +
+        '&id=' + encodeURIComponent(id) + '&data=' + encodeURIComponent(JSON.stringify(payload));
+      return fetch(url).then(function (r) { return r.json(); });
     }
 
     function yen(n) { return Number(n || 0).toLocaleString('ja-JP'); }
@@ -337,11 +335,11 @@
       };
     });
 
-    function showToast(msg) {
+    function showToast(msg, ms) {
       var t = document.getElementById('toast');
       t.textContent = msg;
       t.classList.add('show');
-      setTimeout(function () { t.classList.remove('show'); }, 1800);
+      setTimeout(function () { t.classList.remove('show'); }, ms || 1800);
     }
 
     document.getElementById('showCustomerBtn').onclick = function () {
@@ -364,6 +362,7 @@
       var total = cartTotal();
       payment[payMethod] = total;
 
+      var orderId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
       var payload = {
         channel: channel,
         eventName: channel === '出店' ? (document.getElementById('eventNameInput').value || '') : '',
@@ -375,7 +374,7 @@
       document.getElementById('confirmBtn').disabled = true;
       document.getElementById('confirmBtn').textContent = '登録中...';
 
-      apiPost({ key: getKey(), payload: payload }).then(function (res) {
+      apiSubmit(payload, orderId).then(function (res) {
         if (!res.ok) throw new Error(res.error || '登録に失敗しました');
         showToast('登録しました（合計 ' + yen(res.total) + '円）');
         cart = {};
@@ -384,7 +383,7 @@
         document.getElementById('customerScreen').classList.remove('show');
         document.getElementById('confirmBtn').textContent = '会計確定';
       }).catch(function (err) {
-        showToast('エラー: ' + err.message + '（通信を確認して再度押してください）');
+        showToast('エラー: ' + err.message + '（通信を確認して再度押してください）', 8000);
         document.getElementById('confirmBtn').disabled = false;
         document.getElementById('confirmBtn').textContent = '会計確定';
       });
