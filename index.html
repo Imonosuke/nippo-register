@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>日報レジ</title>
+  <style>
+    :root {
+      --brown: #6b4423;
+      --green: #2e7d32;
+      --green-dark: #1b5e20;
+      --bg: #faf6ef;
+      --card: #ffffff;
+      --border: #e3dccb;
+      --text: #2b241b;
+      --muted: #8a7f6a;
+      --yellow: #fff3c4;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+      background: var(--bg); color: var(--text);
+      overscroll-behavior: none;
+    }
+    #app { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ---- top bar ---- */
+    #topbar {
+      background: var(--brown); color: #fff;
+      padding: 10px 12px; flex-shrink: 0;
+    }
+    #topbar h1 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+    .channel-row { display: flex; gap: 8px; align-items: center; }
+    .channel-toggle { display: flex; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,.5); }
+    .channel-toggle button {
+      border: none; background: transparent; color: #fff; padding: 8px 16px;
+      font-size: 14px; font-weight: 600;
+    }
+    .channel-toggle button.active { background: #fff; color: var(--brown); }
+    #eventNameInput {
+      flex: 1; padding: 8px 10px; border-radius: 8px; border: none; font-size: 14px;
+      display: none;
+    }
+
+    /* ---- category tabs ---- */
+    #tabs {
+      display: flex; background: #fff; border-bottom: 1px solid var(--border); flex-shrink: 0;
+      overflow-x: auto;
+    }
+    #tabs button {
+      flex: 1; padding: 10px 4px; border: none; background: none; font-size: 14px;
+      font-weight: 600; color: var(--muted); border-bottom: 3px solid transparent; white-space: nowrap;
+    }
+    #tabs button.active { color: var(--green-dark); border-bottom-color: var(--green); }
+
+    /* ---- product grid ---- */
+    #productArea { flex: 1; overflow-y: auto; padding: 10px; }
+    #grid {
+      display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+    }
+    @media (min-width: 480px) { #grid { grid-template-columns: repeat(3, 1fr); } }
+    .prod-btn {
+      background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 8px; text-align: center; font-size: 14px; line-height: 1.3;
+      position: relative; min-height: 66px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+    }
+    .prod-btn:active { background: var(--yellow); }
+    .prod-btn .price { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    .prod-btn .badge {
+      position: absolute; top: -8px; right: -6px; background: var(--green);
+      color: #fff; font-size: 12px; font-weight: 700; border-radius: 999px;
+      min-width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
+      padding: 0 5px;
+    }
+
+    /* ---- cart ---- */
+    #cartPanel {
+      flex-shrink: 0; background: #fff; border-top: 1px solid var(--border);
+      max-height: 34vh; display: flex; flex-direction: column;
+    }
+    #cartList { overflow-y: auto; padding: 4px 10px; }
+    .cart-row {
+      display: flex; align-items: center; gap: 8px; padding: 6px 0;
+      border-bottom: 1px solid #f0ece0; font-size: 14px;
+    }
+    .cart-row .name { flex: 1; }
+    .cart-row .qtybox { display: flex; align-items: center; gap: 6px; }
+    .cart-row .qtybox button {
+      width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border);
+      background: #fff; font-size: 16px; line-height: 1;
+    }
+    .cart-row .subtotal { width: 64px; text-align: right; color: var(--muted); }
+    #cartEmpty { padding: 14px; color: var(--muted); font-size: 13px; text-align: center; }
+
+    /* ---- total + actions ---- */
+    #totalRow {
+      display: flex; align-items: baseline; justify-content: space-between;
+      padding: 8px 12px; border-top: 1px solid var(--border);
+    }
+    #totalRow .label { font-size: 13px; color: var(--muted); }
+    #totalRow .amount { font-size: 26px; font-weight: 700; color: var(--green-dark); }
+
+    #payRow { display: flex; gap: 6px; padding: 0 12px 8px; }
+    .pay-btn {
+      flex: 1; padding: 10px 4px; border-radius: 8px; border: 1px solid var(--border);
+      background: #fff; font-size: 13px; font-weight: 600; color: var(--text);
+    }
+    .pay-btn.active { background: var(--green); border-color: var(--green); color: #fff; }
+
+    #actionRow { display: flex; gap: 8px; padding: 0 12px 12px; }
+    #showCustomerBtn, #confirmBtn {
+      flex: 1; padding: 14px 8px; border-radius: 10px; border: none; font-size: 15px; font-weight: 700;
+    }
+    #showCustomerBtn { background: #fff; border: 2px solid var(--brown); color: var(--brown); }
+    #confirmBtn { background: var(--green); color: #fff; }
+    #confirmBtn:disabled { background: #cfcfcf; }
+
+    /* ---- customer-facing full screen total ---- */
+    #customerScreen {
+      position: fixed; inset: 0; background: var(--brown); color: #fff;
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 50; text-align: center; padding: 24px;
+    }
+    #customerScreen.show { display: flex; }
+    #customerScreen .cs-label { font-size: 18px; opacity: .85; margin-bottom: 12px; }
+    #customerScreen .cs-amount { font-size: 68px; font-weight: 800; letter-spacing: 1px; }
+    #customerScreen .cs-items { margin-top: 20px; font-size: 15px; opacity: .9; max-width: 90%; }
+    #customerScreen .cs-close {
+      margin-top: 32px; padding: 12px 28px; border-radius: 999px; border: 2px solid #fff;
+      background: transparent; color: #fff; font-size: 15px; font-weight: 600;
+    }
+
+    /* ---- toast ---- */
+    #toast {
+      position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%) translateY(20px);
+      background: rgba(0,0,0,.82); color: #fff; padding: 10px 18px; border-radius: 999px;
+      font-size: 14px; opacity: 0; pointer-events: none; transition: all .25s ease; z-index: 60;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    #keyScreen {
+      position: fixed; inset: 0; background: var(--bg); z-index: 80;
+      display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px;
+    }
+    #keyScreen.show { display: flex; }
+    #keyScreen input { padding: 12px; font-size: 18px; border: 1px solid var(--border); border-radius: 8px; width: 240px; text-align: center; }
+    #keyScreen button { padding: 12px 32px; font-size: 16px; font-weight: 700; border: none; border-radius: 10px; background: var(--green); color: #fff; }
+    #keyMsg { color: #b3261e; font-size: 13px; min-height: 18px; }
+    #loading { padding: 40px; text-align: center; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="topbar">
+      <h1>日報レジ</h1>
+      <div class="channel-row">
+        <div class="channel-toggle">
+          <button id="chStore" class="active">店頭</button>
+          <button id="chEvent">出店</button>
+        </div>
+        <input id="eventNameInput" type="text" placeholder="イベント名（出店時）">
+      </div>
+    </div>
+
+    <div id="tabs"></div>
+
+    <div id="productArea">
+      <div id="loading">メニューを読み込み中...</div>
+      <div id="grid" style="display:none;"></div>
+    </div>
+
+    <div id="cartPanel">
+      <div id="cartList"><div id="cartEmpty">商品をタップして注文を追加してください</div></div>
+      <div id="totalRow">
+        <span class="label">合計</span>
+        <span class="amount"><span id="totalAmount">0</span>円</span>
+      </div>
+      <div id="payRow">
+        <button class="pay-btn active" data-pay="cash">現金</button>
+        <button class="pay-btn" data-pay="paypay">PayPay</button>
+        <button class="pay-btn" data-pay="other">その他</button>
+      </div>
+      <div id="actionRow">
+        <button id="showCustomerBtn">お客様に見せる</button>
+        <button id="confirmBtn" disabled>会計確定</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="customerScreen">
+    <div class="cs-label">合計金額</div>
+    <div class="cs-amount"><span id="csAmount">0</span>円</div>
+    <div class="cs-items" id="csItems"></div>
+    <button class="cs-close" id="csCloseBtn">閉じる</button>
+  </div>
+
+  <div id="keyScreen">
+    <div style="font-size:18px;font-weight:700;">日報レジ</div>
+    <div style="font-size:14px;color:var(--muted);">合言葉を入力してください</div>
+    <input id="keyInput" type="password" autocomplete="off">
+    <div id="keyMsg"></div>
+    <button id="keyBtn">開始</button>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    var MENU = [];
+    var CATEGORIES = [];
+    var cart = {};          // name -> qty
+    var channel = '店頭';
+    var payMethod = 'cash';
+    var activeCategory = '';
+
+    var API_URL = 'https://script.google.com/macros/s/AKfycbzOcR5PRn0vYkAVD07YhNlnpSCJqwDKeQe-Yry8yUdZ6bUwh7w7JnNeAy0TfWhGu3QFDw/exec';
+
+    function getKey() {
+      try { return localStorage.getItem('nippoKey') || window.__key || ''; } catch (e) { return window.__key || ''; }
+    }
+
+    function apiPost(obj) {
+      return fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(obj)
+      }).then(function (r) { return r.json(); });
+    }
+
+    function yen(n) { return Number(n || 0).toLocaleString('ja-JP'); }
+
+    function unitPrice(product) {
+      return channel === '店頭' ? product.priceStore : product.priceEvent;
+    }
+
+    function findProduct(name) {
+      for (var i = 0; i < MENU.length; i++) if (MENU[i].name === name) return MENU[i];
+      return null;
+    }
+
+    function renderTabs() {
+      var tabs = document.getElementById('tabs');
+      tabs.innerHTML = '';
+      CATEGORIES.forEach(function (cat) {
+        var b = document.createElement('button');
+        b.textContent = cat;
+        if (cat === activeCategory) b.className = 'active';
+        b.onclick = function () { activeCategory = cat; renderTabs(); renderGrid(); };
+        tabs.appendChild(b);
+      });
+    }
+
+    function renderGrid() {
+      var grid = document.getElementById('grid');
+      grid.innerHTML = '';
+      MENU.filter(function (p) { return p.category === activeCategory; }).forEach(function (p) {
+        var btn = document.createElement('button');
+        btn.className = 'prod-btn';
+        var qty = cart[p.name] || 0;
+        btn.innerHTML = '<div>' + p.name + '</div><div class="price">' + yen(unitPrice(p)) + '円</div>' +
+          (qty > 0 ? '<div class="badge">' + qty + '</div>' : '');
+        btn.onclick = function () { addToCart(p.name); };
+        grid.appendChild(btn);
+      });
+    }
+
+    function addToCart(name) {
+      cart[name] = (cart[name] || 0) + 1;
+      renderGrid();
+      renderCart();
+    }
+
+    function changeQty(name, delta) {
+      cart[name] = (cart[name] || 0) + delta;
+      if (cart[name] <= 0) delete cart[name];
+      renderGrid();
+      renderCart();
+    }
+
+    function cartTotal() {
+      var total = 0;
+      Object.keys(cart).forEach(function (name) {
+        var p = findProduct(name);
+        if (p) total += unitPrice(p) * cart[name];
+      });
+      return total;
+    }
+
+    function renderCart() {
+      var list = document.getElementById('cartList');
+      var names = Object.keys(cart);
+      if (names.length === 0) {
+        list.innerHTML = '<div id="cartEmpty">商品をタップして注文を追加してください</div>';
+      } else {
+        list.innerHTML = '';
+        names.forEach(function (name) {
+          var p = findProduct(name);
+          var qty = cart[name];
+          var row = document.createElement('div');
+          row.className = 'cart-row';
+          row.innerHTML =
+            '<span class="name">' + name + '</span>' +
+            '<span class="qtybox">' +
+              '<button data-act="minus">−</button>' +
+              '<span>' + qty + '</span>' +
+              '<button data-act="plus">＋</button>' +
+            '</span>' +
+            '<span class="subtotal">' + yen(unitPrice(p) * qty) + '円</span>';
+          row.querySelector('[data-act="minus"]').onclick = function () { changeQty(name, -1); };
+          row.querySelector('[data-act="plus"]').onclick = function () { changeQty(name, 1); };
+          list.appendChild(row);
+        });
+      }
+      var total = cartTotal();
+      document.getElementById('totalAmount').textContent = yen(total);
+      document.getElementById('confirmBtn').disabled = (names.length === 0);
+    }
+
+    function setChannel(ch) {
+      channel = ch;
+      document.getElementById('chStore').className = ch === '店頭' ? 'active' : '';
+      document.getElementById('chEvent').className = ch === '出店' ? 'active' : '';
+      document.getElementById('eventNameInput').style.display = ch === '出店' ? 'block' : 'none';
+      renderGrid();
+      renderCart();
+    }
+
+    document.getElementById('chStore').onclick = function () { setChannel('店頭'); };
+    document.getElementById('chEvent').onclick = function () { setChannel('出店'); };
+
+    document.querySelectorAll('.pay-btn').forEach(function (btn) {
+      btn.onclick = function () {
+        document.querySelectorAll('.pay-btn').forEach(function (b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        payMethod = btn.getAttribute('data-pay');
+      };
+    });
+
+    function showToast(msg) {
+      var t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(function () { t.classList.remove('show'); }, 1800);
+    }
+
+    document.getElementById('showCustomerBtn').onclick = function () {
+      var screen = document.getElementById('customerScreen');
+      document.getElementById('csAmount').textContent = yen(cartTotal());
+      var itemsText = Object.keys(cart).map(function (name) {
+        return name + ' × ' + cart[name];
+      }).join(' / ');
+      document.getElementById('csItems').textContent = itemsText;
+      screen.classList.add('show');
+    };
+    document.getElementById('csCloseBtn').onclick = function () {
+      document.getElementById('customerScreen').classList.remove('show');
+    };
+
+    document.getElementById('confirmBtn').onclick = function () {
+      var names = Object.keys(cart);
+      if (names.length === 0) return;
+      var payment = { cash: 0, paypay: 0, other: 0 };
+      var total = cartTotal();
+      payment[payMethod] = total;
+
+      var payload = {
+        channel: channel,
+        eventName: channel === '出店' ? (document.getElementById('eventNameInput').value || '') : '',
+        items: names.map(function (name) { return { name: name, qty: cart[name] }; }),
+        payment: payment,
+        memo: ''
+      };
+
+      document.getElementById('confirmBtn').disabled = true;
+      document.getElementById('confirmBtn').textContent = '登録中...';
+
+      apiPost({ key: getKey(), payload: payload }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || '登録に失敗しました');
+        showToast('登録しました（合計 ' + yen(res.total) + '円）');
+        cart = {};
+        renderGrid();
+        renderCart();
+        document.getElementById('customerScreen').classList.remove('show');
+        document.getElementById('confirmBtn').textContent = '会計確定';
+      }).catch(function (err) {
+        showToast('エラー: ' + err.message + '（通信を確認して再度押してください）');
+        document.getElementById('confirmBtn').disabled = false;
+        document.getElementById('confirmBtn').textContent = '会計確定';
+      });
+    };
+
+    function loadMenu() {
+      fetch(API_URL + '?action=menu&key=' + encodeURIComponent(getKey()))
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (!res.ok) {
+            if (res.error === 'BAD_KEY') { showKeyScreen('合言葉が違います'); return; }
+            throw new Error(res.error);
+          }
+          MENU = res.menu;
+          CATEGORIES = [];
+          MENU.forEach(function (p) {
+            if (CATEGORIES.indexOf(p.category) === -1) CATEGORIES.push(p.category);
+          });
+          activeCategory = CATEGORIES[0] || '';
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('grid').style.display = 'grid';
+          renderTabs();
+          renderGrid();
+          renderCart();
+        })
+        .catch(function (err) {
+          var l = document.getElementById('loading');
+          l.style.display = 'block';
+          l.innerHTML = '読み込みエラー: ' + err.message + '<br><br><button onclick="location.reload()">再読み込み</button>';
+        });
+    }
+
+    function showKeyScreen(msg) {
+      document.getElementById('keyMsg').textContent = msg || '';
+      document.getElementById('keyScreen').classList.add('show');
+    }
+    document.getElementById('keyBtn').onclick = function () {
+      var v = document.getElementById('keyInput').value.trim();
+      if (!v) return;
+      try { localStorage.setItem('nippoKey', v); } catch (e) { window.__key = v; }
+      document.getElementById('keyScreen').classList.remove('show');
+      loadMenu();
+    };
+
+    if (getKey()) loadMenu(); else showKeyScreen('');
+  </script>
+</body>
+</html>
