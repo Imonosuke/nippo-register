@@ -125,7 +125,17 @@
     }
     #customerScreen.show { display: flex; }
     #customerScreen .cs-label { font-size: 18px; opacity: .85; margin-bottom: 12px; }
+    #customerScreen .cs-original {
+      font-size: 18px; opacity: .7; text-decoration: line-through; margin-bottom: 4px; display: none;
+    }
+    #customerScreen .cs-original.show { display: block; }
     #customerScreen .cs-amount { font-size: 68px; font-weight: 800; letter-spacing: 1px; }
+    #couponRow { display: flex; gap: 10px; margin-top: 20px; }
+    .coupon-btn {
+      padding: 12px 18px; border-radius: 999px; border: 2px solid #fff;
+      background: transparent; color: #fff; font-size: 15px; font-weight: 600;
+    }
+    .coupon-btn.active { background: #fff; color: var(--brown); }
     #customerScreen .cs-items { margin-top: 20px; font-size: 15px; opacity: .9; max-width: 90%; }
     #customerScreen .cs-close {
       margin-top: 32px; padding: 12px 28px; border-radius: 999px; border: 2px solid #fff;
@@ -174,7 +184,7 @@
     <div id="cartPanel">
       <div id="cartList"><div id="cartEmpty">商品をタップして注文を追加してください</div></div>
       <div id="totalRow">
-        <span class="label">合計</span>
+        <span class="label" id="totalLabel">合計</span>
         <span class="amount"><span id="totalAmount">0</span>円</span>
       </div>
       <div id="payRow">
@@ -191,7 +201,12 @@
 
   <div id="customerScreen">
     <div class="cs-label">合計金額</div>
+    <div class="cs-original" id="csOriginal"></div>
     <div class="cs-amount"><span id="csAmount">0</span>円</div>
+    <div id="couponRow">
+      <button class="coupon-btn" id="couponFixedBtn">100円引き</button>
+      <button class="coupon-btn" id="couponPercentBtn">10%引き</button>
+    </div>
     <div class="cs-items" id="csItems"></div>
     <button class="cs-close" id="csCloseBtn">閉じる</button>
   </div>
@@ -213,6 +228,7 @@
     var channel = '店頭';
     var payMethod = 'cash';
     var activeCategory = '';
+    var discount = null;    // null | 'fixed100' | 'percent10'
 
     var API_URL = 'https://script.google.com/macros/s/AKfycbzOcR5PRn0vYkAVD07YhNlnpSCJqwDKeQe-Yry8yUdZ6bUwh7w7JnNeAy0TfWhGu3QFDw/exec';
 
@@ -285,6 +301,36 @@
       return total;
     }
 
+    function discountValue(total) {
+      if (discount === 'fixed100') return Math.min(100, total);
+      if (discount === 'percent10') return Math.round(total * 0.1);
+      return 0;
+    }
+
+    function discountedTotal() {
+      var total = cartTotal();
+      return Math.max(0, total - discountValue(total));
+    }
+
+    function couponLabel(d) {
+      return d === 'fixed100' ? 'クーポン100円引き' : d === 'percent10' ? 'クーポン10%引き' : '';
+    }
+
+    function renderCoupon() {
+      document.getElementById('couponFixedBtn').className = 'coupon-btn' + (discount === 'fixed100' ? ' active' : '');
+      document.getElementById('couponPercentBtn').className = 'coupon-btn' + (discount === 'percent10' ? ' active' : '');
+      var total = cartTotal();
+      var disc = discountedTotal();
+      document.getElementById('csAmount').textContent = yen(disc);
+      var orig = document.getElementById('csOriginal');
+      if (discount && disc !== total) {
+        orig.textContent = yen(total) + '円';
+        orig.classList.add('show');
+      } else {
+        orig.classList.remove('show');
+      }
+    }
+
     function renderCart() {
       var list = document.getElementById('cartList');
       var names = Object.keys(cart);
@@ -310,8 +356,10 @@
           list.appendChild(row);
         });
       }
-      var total = cartTotal();
+      if (names.length === 0) discount = null;
+      var total = discountedTotal();
       document.getElementById('totalAmount').textContent = yen(total);
+      document.getElementById('totalLabel').textContent = discount ? '合計（' + couponLabel(discount) + '）' : '合計';
       document.getElementById('confirmBtn').disabled = (names.length === 0);
     }
 
@@ -344,7 +392,7 @@
 
     document.getElementById('showCustomerBtn').onclick = function () {
       var screen = document.getElementById('customerScreen');
-      document.getElementById('csAmount').textContent = yen(cartTotal());
+      renderCoupon();
       var itemsText = Object.keys(cart).map(function (name) {
         return name + ' × ' + cart[name];
       }).join(' / ');
@@ -354,12 +402,22 @@
     document.getElementById('csCloseBtn').onclick = function () {
       document.getElementById('customerScreen').classList.remove('show');
     };
+    document.getElementById('couponFixedBtn').onclick = function () {
+      discount = discount === 'fixed100' ? null : 'fixed100';
+      renderCoupon();
+      renderCart();
+    };
+    document.getElementById('couponPercentBtn').onclick = function () {
+      discount = discount === 'percent10' ? null : 'percent10';
+      renderCoupon();
+      renderCart();
+    };
 
     document.getElementById('confirmBtn').onclick = function () {
       var names = Object.keys(cart);
       if (names.length === 0) return;
       var payment = { cash: 0, paypay: 0, other: 0 };
-      var total = cartTotal();
+      var total = discountedTotal();
       payment[payMethod] = total;
 
       var orderId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -368,7 +426,8 @@
         eventName: channel === '出店' ? (document.getElementById('eventNameInput').value || '') : '',
         items: names.map(function (name) { return { name: name, qty: cart[name] }; }),
         payment: payment,
-        memo: ''
+        discountAmount: discountValue(cartTotal()),
+        memo: couponLabel(discount)
       };
 
       document.getElementById('confirmBtn').disabled = true;
@@ -378,6 +437,7 @@
         if (!res.ok) throw new Error(res.error || '登録に失敗しました');
         showToast('登録しました（合計 ' + yen(res.total) + '円）');
         cart = {};
+        discount = null;
         renderGrid();
         renderCart();
         document.getElementById('customerScreen').classList.remove('show');
