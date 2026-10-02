@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>レシート入力</title>
+  <style>
+    :root {
+      --brown: #6b4423;
+      --green: #2e7d32;
+      --green-dark: #1b5e20;
+      --bg: #faf6ef;
+      --card: #ffffff;
+      --border: #e3dccb;
+      --text: #2b241b;
+      --muted: #8a7f6a;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; padding: 0; min-height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+      background: var(--bg); color: var(--text);
+    }
+    #topbar { background: var(--brown); color: #fff; padding: 14px 16px; }
+    #topbar h1 { margin: 0; font-size: 17px; font-weight: 600; }
+
+    #form { padding: 16px; max-width: 480px; margin: 0 auto; }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+    .field input, .field select {
+      width: 100%; padding: 12px; font-size: 16px; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--card); color: var(--text);
+    }
+
+    #photoRow {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+    }
+    #photoBtn {
+      flex-shrink: 0; padding: 14px 16px; border-radius: 10px; border: 2px solid var(--brown);
+      background: #fff; color: var(--brown); font-size: 15px; font-weight: 700;
+    }
+    #photoPreview {
+      width: 64px; height: 64px; border-radius: 8px; object-fit: cover; border: 1px solid var(--border);
+      display: none;
+    }
+    #photoLabel { font-size: 13px; color: var(--muted); }
+
+    #submitBtn {
+      width: 100%; padding: 16px; border-radius: 10px; border: none;
+      background: var(--green); color: #fff; font-size: 16px; font-weight: 700; margin-top: 8px;
+    }
+    #submitBtn:disabled { background: #cfcfcf; }
+
+    #toast {
+      position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%) translateY(20px);
+      background: rgba(0,0,0,.82); color: #fff; padding: 10px 18px; border-radius: 999px;
+      font-size: 14px; opacity: 0; pointer-events: none; transition: all .25s ease; z-index: 60;
+      max-width: 90%; text-align: center;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    #keyScreen {
+      position: fixed; inset: 0; background: var(--bg); z-index: 80;
+      display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px;
+    }
+    #keyScreen.show { display: flex; }
+    #keyScreen input { padding: 12px; font-size: 18px; border: 1px solid var(--border); border-radius: 8px; width: 240px; text-align: center; }
+    #keyScreen button { padding: 12px 32px; font-size: 16px; font-weight: 700; border: none; border-radius: 10px; background: var(--green); color: #fff; }
+    #keyMsg { color: #b3261e; font-size: 13px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <div id="topbar"><h1>レシート入力</h1></div>
+
+  <form id="form">
+    <div class="field">
+      <label>日付</label>
+      <input type="date" id="fDate">
+    </div>
+    <div class="field">
+      <label>経費科目</label>
+      <select id="fCategory">
+        <option value="仕入高">仕入高</option>
+        <option value="荷造運賃">荷造運賃</option>
+        <option value="水道光熱費">水道光熱費</option>
+        <option value="旅費交通費">旅費交通費</option>
+        <option value="通信費">通信費</option>
+        <option value="広告宣伝費">広告宣伝費</option>
+        <option value="消耗品費">消耗品費</option>
+        <option value="雑費">雑費</option>
+        <option value="その他">その他</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>品目</label>
+      <input type="text" id="fItem" placeholder="例：電気代、資材代など">
+    </div>
+    <div class="field">
+      <label>金額</label>
+      <input type="number" id="fAmount" inputmode="numeric" placeholder="円">
+    </div>
+    <div class="field">
+      <label>支払方法</label>
+      <select id="fPay">
+        <option value="現金">現金</option>
+        <option value="銀行振込">銀行振込</option>
+        <option value="クレジット">クレジット</option>
+        <option value="PayPay">PayPay</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>備考（任意）</label>
+      <input type="text" id="fMemo">
+    </div>
+
+    <div class="field">
+      <label>レシート写真</label>
+      <div id="photoRow">
+        <button type="button" id="photoBtn">写真を撮る</button>
+        <img id="photoPreview">
+        <span id="photoLabel">未選択</span>
+      </div>
+      <input type="file" id="fPhoto" accept="image/*" capture="environment" style="display:none;">
+    </div>
+
+    <button type="submit" id="submitBtn">登録する</button>
+  </form>
+
+  <div id="keyScreen">
+    <div style="font-size:18px;font-weight:700;">レシート入力</div>
+    <div style="font-size:14px;color:var(--muted);">合言葉を入力してください</div>
+    <input id="keyInput" type="password" autocomplete="off">
+    <div id="keyMsg"></div>
+    <button id="keyBtn">開始</button>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    var API_URL = 'https://script.google.com/macros/s/AKfycbzOcR5PRn0vYkAVD07YhNlnpSCJqwDKeQe-Yry8yUdZ6bUwh7w7JnNeAy0TfWhGu3QFDw/exec';
+    var pendingExpenseId = null; // エラー再送時も同じIDを使うため、内容が変わるまで使い回す
+
+    function getKey() {
+      try { return localStorage.getItem('nippoKey') || window.__key || ''; } catch (e) { return window.__key || ''; }
+    }
+
+    // フォームの内容が変わったら、それは新しい入力とみなしてIDをリセットする
+    document.getElementById('form').addEventListener('input', function () { pendingExpenseId = null; });
+    document.getElementById('form').addEventListener('change', function () { pendingExpenseId = null; });
+
+    function submitExpense(payload) {
+      return fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      }).then(function (r) { return r.json(); });
+    }
+
+    // 通信エラー時だけ1回だけ自動で再送する(同じidを使うのでサーバー側の重複防止が効く)
+    function submitExpenseWithRetry(payload) {
+      return submitExpense(payload).catch(function () {
+        return new Promise(function (resolve) { setTimeout(resolve, 1500); })
+          .then(function () { return submitExpense(payload); });
+      });
+    }
+
+    function showToast(msg, ms) {
+      var t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(function () { t.classList.remove('show'); }, ms || 2200);
+    }
+
+    function todayStr() {
+      var d = new Date();
+      var m = String(d.getMonth() + 1).padStart(2, '0');
+      var day = String(d.getDate()).padStart(2, '0');
+      return d.getFullYear() + '-' + m + '-' + day;
+    }
+    document.getElementById('fDate').value = todayStr();
+
+    var photoDataUrl = null;
+    var photoMime = null;
+    document.getElementById('photoBtn').onclick = function () {
+      document.getElementById('fPhoto').click();
+    };
+    document.getElementById('fPhoto').onchange = function (e) {
+      var file = e.target.files[0];
+      if (!file) return;
+      photoMime = file.type || 'image/jpeg';
+      var reader = new FileReader();
+      reader.onload = function () {
+        photoDataUrl = reader.result;
+        var img = document.getElementById('photoPreview');
+        img.src = photoDataUrl;
+        img.style.display = 'block';
+        document.getElementById('photoLabel').textContent = file.name;
+      };
+      reader.readAsDataURL(file);
+    };
+
+    document.getElementById('form').onsubmit = function (e) {
+      e.preventDefault();
+      var amount = document.getElementById('fAmount').value;
+      if (!amount) { showToast('金額を入力してください'); return; }
+
+      if (!pendingExpenseId) pendingExpenseId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+      var payload = {
+        key: getKey(),
+        action: 'expense',
+        id: pendingExpenseId,
+        date: document.getElementById('fDate').value,
+        category: document.getElementById('fCategory').value,
+        item: document.getElementById('fItem').value,
+        amount: amount,
+        payMethod: document.getElementById('fPay').value,
+        memo: document.getElementById('fMemo').value,
+        photo: photoDataUrl,
+        mimeType: photoMime
+      };
+
+      var btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.textContent = '登録中...';
+
+      submitExpenseWithRetry(payload)
+        .then(function (res) {
+          if (!res.ok) throw new Error(res.error || '登録に失敗しました');
+          pendingExpenseId = null;
+          showToast('登録しました');
+          document.getElementById('fItem').value = '';
+          document.getElementById('fAmount').value = '';
+          document.getElementById('fMemo').value = '';
+          photoDataUrl = null;
+          photoMime = null;
+          document.getElementById('photoPreview').style.display = 'none';
+          document.getElementById('photoLabel').textContent = '未選択';
+          document.getElementById('fPhoto').value = '';
+        })
+        .catch(function (err) {
+          showToast('エラー: ' + err.message + '（通信を確認して再度押してください）', 8000);
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = '登録する';
+        });
+    };
+
+    function showKeyScreen(msg) {
+      document.getElementById('keyMsg').textContent = msg || '';
+      document.getElementById('keyScreen').classList.add('show');
+    }
+    document.getElementById('keyBtn').onclick = function () {
+      var v = document.getElementById('keyInput').value.trim();
+      if (!v) return;
+      try { localStorage.setItem('nippoKey', v); } catch (e) { window.__key = v; }
+      document.getElementById('keyScreen').classList.remove('show');
+    };
+    if (!getKey()) showKeyScreen('');
+  </script>
+</body>
+</html>
