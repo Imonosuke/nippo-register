@@ -229,6 +229,7 @@
     var payMethod = 'cash';
     var activeCategory = '';
     var discount = null;    // null | 'fixed100' | 'percent10'
+    var pendingOrderId = null; // エラー再送時も同じIDを使うため、注文内容が変わるまで使い回す
 
     var API_URL = 'https://script.google.com/macros/s/AKfycbzOcR5PRn0vYkAVD07YhNlnpSCJqwDKeQe-Yry8yUdZ6bUwh7w7JnNeAy0TfWhGu3QFDw/exec';
 
@@ -240,6 +241,14 @@
       var url = API_URL + '?action=submit&key=' + encodeURIComponent(getKey()) +
         '&id=' + encodeURIComponent(id) + '&data=' + encodeURIComponent(JSON.stringify(payload));
       return fetch(url).then(function (r) { return r.json(); });
+    }
+
+    // 通信エラー時だけ1回だけ自動で再送する(同じidを使うのでサーバー側の重複防止が効く)
+    function apiSubmitWithRetry(payload, id) {
+      return apiSubmit(payload, id).catch(function () {
+        return new Promise(function (resolve) { setTimeout(resolve, 1500); })
+          .then(function () { return apiSubmit(payload, id); });
+      });
     }
 
     function yen(n) { return Number(n || 0).toLocaleString('ja-JP'); }
@@ -281,6 +290,7 @@
 
     function addToCart(name) {
       cart[name] = (cart[name] || 0) + 1;
+      pendingOrderId = null;
       renderGrid();
       renderCart();
     }
@@ -288,6 +298,7 @@
     function changeQty(name, delta) {
       cart[name] = (cart[name] || 0) + delta;
       if (cart[name] <= 0) delete cart[name];
+      pendingOrderId = null;
       renderGrid();
       renderCart();
     }
@@ -365,6 +376,7 @@
 
     function setChannel(ch) {
       channel = ch;
+      pendingOrderId = null;
       document.getElementById('chStore').className = ch === '店頭' ? 'active' : '';
       document.getElementById('chEvent').className = ch === '出店' ? 'active' : '';
       document.getElementById('eventNameInput').style.display = ch === '出店' ? 'block' : 'none';
@@ -380,6 +392,7 @@
         document.querySelectorAll('.pay-btn').forEach(function (b) { b.classList.remove('active'); });
         btn.classList.add('active');
         payMethod = btn.getAttribute('data-pay');
+        pendingOrderId = null;
       };
     });
 
@@ -404,11 +417,13 @@
     };
     document.getElementById('couponFixedBtn').onclick = function () {
       discount = discount === 'fixed100' ? null : 'fixed100';
+      pendingOrderId = null;
       renderCoupon();
       renderCart();
     };
     document.getElementById('couponPercentBtn').onclick = function () {
       discount = discount === 'percent10' ? null : 'percent10';
+      pendingOrderId = null;
       renderCoupon();
       renderCart();
     };
@@ -420,7 +435,8 @@
       var total = discountedTotal();
       payment[payMethod] = total;
 
-      var orderId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+      if (!pendingOrderId) pendingOrderId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+      var orderId = pendingOrderId;
       var payload = {
         channel: channel,
         eventName: channel === '出店' ? (document.getElementById('eventNameInput').value || '') : '',
@@ -433,8 +449,9 @@
       document.getElementById('confirmBtn').disabled = true;
       document.getElementById('confirmBtn').textContent = '登録中...';
 
-      apiSubmit(payload, orderId).then(function (res) {
+      apiSubmitWithRetry(payload, orderId).then(function (res) {
         if (!res.ok) throw new Error(res.error || '登録に失敗しました');
+        pendingOrderId = null;
         showToast('登録しました（合計 ' + yen(res.total) + '円）');
         cart = {};
         discount = null;
