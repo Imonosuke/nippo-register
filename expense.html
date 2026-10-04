@@ -148,6 +148,16 @@
     document.getElementById('form').addEventListener('input', function () { pendingExpenseId = null; });
     document.getElementById('form').addEventListener('change', function () { pendingExpenseId = null; });
 
+    var ocrSeq = 0;
+
+    function submitOcr(payload) {
+      return fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      }).then(function (r) { return r.json(); });
+    }
+
     function submitExpense(payload) {
       return fetch(API_URL, {
         method: 'POST',
@@ -184,17 +194,58 @@
     document.getElementById('photoBtn').onclick = function () {
       document.getElementById('fPhoto').click();
     };
+    // スマホの写真は大きい(OCRは2MBまで)ので、長辺1600pxのJPEGに縮小する
+    function shrinkImage(dataUrl, cb) {
+      var im = new Image();
+      im.onload = function () {
+        var max = 1600;
+        var scale = Math.min(1, max / Math.max(im.width, im.height));
+        var c = document.createElement('canvas');
+        c.width = Math.round(im.width * scale);
+        c.height = Math.round(im.height * scale);
+        c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+        cb(c.toDataURL('image/jpeg', 0.85));
+      };
+      im.onerror = function () { cb(dataUrl); };
+      im.src = dataUrl;
+    }
+
+    function runOcr(dataUrl) {
+      var label = document.getElementById('photoLabel');
+      label.textContent = '読み取り中...';
+      var seq = ++ocrSeq;
+      submitOcr({ key: getKey(), action: 'ocr', photo: dataUrl, mimeType: 'image/jpeg' })
+        .then(function (res) {
+          if (seq !== ocrSeq) return;
+          if (!res.ok) throw new Error(res.error || '読み取りに失敗しました');
+          var p = res.parsed || {};
+          var filled = [];
+          if (p.date) { document.getElementById('fDate').value = p.date; filled.push('日付'); }
+          if (p.amount && !document.getElementById('fAmount').value) { document.getElementById('fAmount').value = p.amount; filled.push('金額'); }
+          if (p.store && !document.getElementById('fItem').value) { document.getElementById('fItem').value = p.store; filled.push('品目'); }
+          label.textContent = '読み取り完了';
+          showToast(filled.length ? filled.join('・') + 'を自動入力しました。内容を確認してください' : '読み取れませんでした。手入力してください', 4000);
+        })
+        .catch(function (err) {
+          if (seq !== ocrSeq) return;
+          label.textContent = '読み取り失敗(手入力できます)';
+          showToast('読み取りエラー: ' + err.message, 5000);
+        });
+    }
+
     document.getElementById('fPhoto').onchange = function (e) {
       var file = e.target.files[0];
       if (!file) return;
-      photoMime = file.type || 'image/jpeg';
       var reader = new FileReader();
       reader.onload = function () {
-        photoDataUrl = reader.result;
-        var img = document.getElementById('photoPreview');
-        img.src = photoDataUrl;
-        img.style.display = 'block';
-        document.getElementById('photoLabel').textContent = file.name;
+        shrinkImage(reader.result, function (small) {
+          photoDataUrl = small;
+          photoMime = 'image/jpeg';
+          var img = document.getElementById('photoPreview');
+          img.src = small;
+          img.style.display = 'block';
+          runOcr(small);
+        });
       };
       reader.readAsDataURL(file);
     };
@@ -227,6 +278,7 @@
         .then(function (res) {
           if (!res.ok) throw new Error(res.error || '登録に失敗しました');
           pendingExpenseId = null;
+          ocrSeq++;
           showToast('登録しました');
           document.getElementById('fItem').value = '';
           document.getElementById('fAmount').value = '';
