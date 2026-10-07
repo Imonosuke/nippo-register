@@ -210,10 +210,10 @@
       im.src = dataUrl;
     }
 
-    function runOcr(dataUrl) {
+    function runOcr(dataUrl, retried) {
       var label = document.getElementById('photoLabel');
-      label.textContent = '読み取り中...';
-      var seq = ++ocrSeq;
+      label.textContent = retried ? '混み合っています。再試行中...' : '読み取り中...';
+      var seq = retried ? ocrSeq : ++ocrSeq;
       submitOcr({ key: getKey(), action: 'ocr', photo: dataUrl, mimeType: 'image/jpeg' })
         .then(function (res) {
           if (seq !== ocrSeq) return;
@@ -228,6 +228,11 @@
         })
         .catch(function (err) {
           if (seq !== ocrSeq) return;
+          if (!retried && /rate limit|quota/i.test(err.message)) {
+            label.textContent = '混み合っています。再試行中...';
+            setTimeout(function () { if (seq === ocrSeq) runOcr(dataUrl, true); }, 8000);
+            return;
+          }
           label.textContent = '読み取り失敗(手入力できます)';
           showToast('読み取りエラー: ' + err.message, 5000);
         });
