@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>卸し入力</title>
+  <style>
+    :root {
+      --brown: #6b4423;
+      --green: #2e7d32;
+      --green-dark: #1b5e20;
+      --bg: #faf6ef;
+      --card: #ffffff;
+      --border: #e3dccb;
+      --text: #2b241b;
+      --muted: #8a7f6a;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; padding: 0; min-height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+      background: var(--bg); color: var(--text);
+    }
+    #topbar { background: var(--brown); color: #fff; padding: 14px 16px; }
+    #topbar h1 { margin: 0; font-size: 17px; font-weight: 600; }
+
+    #form { padding: 16px; max-width: 480px; margin: 0 auto; }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+    .field input, .field select {
+      width: 100%; padding: 12px; font-size: 16px; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--card); color: var(--text);
+    }
+    .row2 { display: flex; gap: 10px; }
+    .row2 .field { flex: 1; }
+
+    #totalBox {
+      background: #fff; border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: baseline;
+    }
+    #totalBox .label { font-size: 13px; color: var(--muted); }
+    #totalBox .amount { font-size: 26px; font-weight: 700; color: var(--green-dark); }
+
+    #submitBtn {
+      width: 100%; padding: 16px; border-radius: 10px; border: none;
+      background: var(--green); color: #fff; font-size: 16px; font-weight: 700; margin-top: 4px;
+    }
+    #submitBtn:disabled { background: #cfcfcf; }
+
+    #loading { padding: 40px; text-align: center; color: var(--muted); }
+
+    #toast {
+      position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%) translateY(20px);
+      background: rgba(0,0,0,.82); color: #fff; padding: 10px 18px; border-radius: 999px;
+      font-size: 14px; opacity: 0; pointer-events: none; transition: all .25s ease; z-index: 60;
+      max-width: 90%; text-align: center;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    #keyScreen {
+      position: fixed; inset: 0; background: var(--bg); z-index: 80;
+      display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px;
+    }
+    #keyScreen.show { display: flex; }
+    #keyScreen input { padding: 12px; font-size: 18px; border: 1px solid var(--border); border-radius: 8px; width: 240px; text-align: center; }
+    #keyScreen button { padding: 12px 32px; font-size: 16px; font-weight: 700; border: none; border-radius: 10px; background: var(--green); color: #fff; }
+    #keyMsg { color: #b3261e; font-size: 13px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <div id="topbar"><h1>卸し入力</h1></div>
+  <div id="loading">卸先を読み込み中...</div>
+
+  <form id="form" style="display:none;">
+    <div class="field">
+      <label>日付</label>
+      <input type="date" id="fDate">
+    </div>
+    <div class="field">
+      <label>卸先</label>
+      <select id="fShop"></select>
+    </div>
+    <div class="field">
+      <label>商品</label>
+      <select id="fItem">
+        <option value="冷やし">冷やし</option>
+        <option value="干しいも">干しいも</option>
+        <option value="ペースト500g">ペースト500g</option>
+        <option value="ペースト1kg">ペースト1kg</option>
+        <option value="その他">その他</option>
+      </select>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>数量</label>
+        <input type="number" id="fQty" inputmode="numeric" min="1" placeholder="個数">
+      </div>
+      <div class="field">
+        <label>単価(円)</label>
+        <input type="number" id="fPrice" inputmode="numeric" min="0">
+      </div>
+    </div>
+    <div id="totalBox"><span class="label">金額</span><span class="amount"><span id="totalAmount">0</span>円</span></div>
+    <div class="field">
+      <label>入金状況</label>
+      <select id="fPaid">
+        <option value="未収">未収</option>
+        <option value="入金済">入金済</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>備考（任意）</label>
+      <input type="text" id="fMemo">
+    </div>
+    <button type="submit" id="submitBtn">登録する</button>
+  </form>
+
+  <div id="keyScreen">
+    <div style="font-size:18px;font-weight:700;">卸し入力</div>
+    <div style="font-size:14px;color:var(--muted);">合言葉を入力してください</div>
+    <input id="keyInput" type="password" autocomplete="off">
+    <div id="keyMsg"></div>
+    <button id="keyBtn">開始</button>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    var API_URL = 'https://script.google.com/macros/s/AKfycbzOcR5PRn0vYkAVD07YhNlnpSCJqwDKeQe-Yry8yUdZ6bUwh7w7JnNeAy0TfWhGu3QFDw/exec';
+    var MENU = [];
+    var pendingId = null; // エラー再送時も同じIDを使うため、内容が変わるまで使い回す
+
+    function getKey() {
+      try { return localStorage.getItem('nippoKey') || window.__key || ''; } catch (e) { return window.__key || ''; }
+    }
+
+    function yen(n) { return Number(n || 0).toLocaleString('ja-JP'); }
+
+    function showToast(msg, ms) {
+      var t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(function () { t.classList.remove('show'); }, ms || 2200);
+    }
+
+    function todayStr() {
+      var d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function updateTotal() {
+      var q = Number(document.getElementById('fQty').value) || 0;
+      var p = Number(document.getElementById('fPrice').value) || 0;
+      document.getElementById('totalAmount').textContent = yen(q * p);
+    }
+
+    // 卸先を選んだら、マスタの対象商品と単価を自動で入れる(あとから変更できる)
+    function applyShop() {
+      var name = document.getElementById('fShop').value;
+      var m = null;
+      MENU.forEach(function (x) { if (x.name === name) m = x; });
+      if (!m) return;
+      var item = m.item === 'ペースト' ? 'ペースト500g' : m.item;
+      var sel = document.getElementById('fItem');
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === item) { sel.value = item; break; }
+      }
+      document.getElementById('fPrice').value = m.price;
+      updateTotal();
+    }
+
+    // 入力内容が変わったら新しい入力とみなして、再送用のIDをリセットする
+    document.getElementById('form').addEventListener('input', function () { pendingId = null; updateTotal(); });
+    document.getElementById('form').addEventListener('change', function () { pendingId = null; });
+    document.getElementById('fShop').addEventListener('change', applyShop);
+
+    var formShown = false;
+
+    function renderMenu(menu) {
+      MENU = menu;
+      var sel = document.getElementById('fShop');
+      var current = sel.value;
+      sel.innerHTML = '';
+      MENU.forEach(function (m) {
+        var o = document.createElement('option');
+        o.value = m.name; o.textContent = m.name;
+        sel.appendChild(o);
+      });
+      if (!formShown) {
+        document.getElementById('fDate').value = todayStr();
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('form').style.display = 'block';
+        formShown = true;
+        applyShop();
+      } else if (current) {
+        sel.value = current;
+      }
+    }
+
+    // 前回の卸先リストを端末に覚えておき、すぐ表示してから最新を裏で取得する
+    function loadMenu() {
+      try {
+        var cached = JSON.parse(localStorage.getItem('wholesaleMenu') || 'null');
+        if (cached && cached.length) renderMenu(cached);
+      } catch (e) {}
+      fetch(API_URL + '?action=wholesaleMenu&key=' + encodeURIComponent(getKey()))
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (!res.ok) {
+            if (res.error === 'BAD_KEY') { showKeyScreen('合言葉が違います'); return; }
+            throw new Error(res.error);
+          }
+          try { localStorage.setItem('wholesaleMenu', JSON.stringify(res.menu)); } catch (e) {}
+          renderMenu(res.menu);
+        })
+        .catch(function (err) {
+          if (formShown) return;
+          var l = document.getElementById('loading');
+          l.innerHTML = '読み込みエラー: ' + err.message + '<br><br><button onclick="location.reload()">再読み込み</button>';
+        });
+    }
+
+    function submitWholesale(payload) {
+      return fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      }).then(function (r) { return r.json(); });
+    }
+
+    // 通信エラー時だけ1回だけ自動で再送する(同じidを使うのでサーバー側の重複防止が効く)
+    function submitWithRetry(payload) {
+      return submitWholesale(payload).catch(function () {
+        return new Promise(function (resolve) { setTimeout(resolve, 1500); })
+          .then(function () { return submitWholesale(payload); });
+      });
+    }
+
+    document.getElementById('form').onsubmit = function (e) {
+      e.preventDefault();
+      var qty = document.getElementById('fQty').value;
+      var price = document.getElementById('fPrice').value;
+      if (!qty || Number(qty) <= 0) { showToast('数量を入力してください'); return; }
+      if (price === '') { showToast('単価を入力してください'); return; }
+
+      if (!pendingId) pendingId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+      var payload = {
+        key: getKey(),
+        action: 'wholesale',
+        id: pendingId,
+        date: document.getElementById('fDate').value,
+        shop: document.getElementById('fShop').value,
+        item: document.getElementById('fItem').value,
+        qty: qty,
+        price: price,
+        paid: document.getElementById('fPaid').value,
+        memo: document.getElementById('fMemo').value
+      };
+
+      var btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.textContent = '登録中...';
+
+      submitWithRetry(payload)
+        .then(function (res) {
+          if (!res.ok) throw new Error(res.error || '登録に失敗しました');
+          pendingId = null;
+          showToast('登録しました（' + payload.shop + ' ' + yen(res.amount) + '円）');
+          document.getElementById('fQty').value = '';
+          document.getElementById('fMemo').value = '';
+          updateTotal();
+        })
+        .catch(function (err) {
+          showToast('エラー: ' + err.message + '（通信を確認して再度押してください）', 8000);
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = '登録する';
+        });
+    };
+
+    function showKeyScreen(msg) {
+      document.getElementById('keyMsg').textContent = msg || '';
+      document.getElementById('keyScreen').classList.add('show');
+    }
+    document.getElementById('keyBtn').onclick = function () {
+      var v = document.getElementById('keyInput').value.trim();
+      if (!v) return;
+      try { localStorage.setItem('nippoKey', v); } catch (e) { window.__key = v; }
+      document.getElementById('keyScreen').classList.remove('show');
+      loadMenu();
+    };
+
+    if (getKey()) loadMenu(); else showKeyScreen('');
+  </script>
+</body>
+</html>
