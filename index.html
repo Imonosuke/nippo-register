@@ -230,6 +230,9 @@
     var activeCategory = '';
     var discount = null;    // null | 'fixed100' | 'percent10'
     var pendingOrderId = null; // エラー再送時も同じIDを使うため、注文内容が変わるまで使い回す
+    var SETS = [];          // 単価マスタの「セットメニュー」表
+    var setsInCart = {};    // セット名 -> 個数
+    var SET_TAB = 'セット';
 
     var API_URL = 'https://script.google.com/macros/s/AKfycbzOcR5PRn0vYkAVD07YhNlnpSCJqwDKeQe-Yry8yUdZ6bUwh7w7JnNeAy0TfWhGu3QFDw/exec';
 
@@ -274,9 +277,103 @@
       });
     }
 
+    function setPrice(s) { return channel === '店頭' ? s.priceStore : s.priceEvent; }
+
+    // セットの単品合計(中身の商品が単価マスタに無ければ null)
+    function setNormal(s) {
+      var sum = 0;
+      for (var i = 0; i < s.items.length; i++) {
+        var p = findProduct(s.items[i]);
+        if (!p) return null;
+        sum += unitPrice(p);
+      }
+      return sum;
+    }
+
+    // カートの中身で実際に成立しているセットの数(中身の商品が足りなければ減らす)
+    function effectiveSets() {
+      var remaining = {};
+      Object.keys(cart).forEach(function (n) { remaining[n] = cart[n]; });
+      var res = [];
+      SETS.forEach(function (s) {
+        var want = setsInCart[s.name] || 0;
+        var normal = setNormal(s);
+        if (!want || normal === null) return;
+        var need = {};
+        s.items.forEach(function (n) { need[n] = (need[n] || 0) + 1; });
+        var n = want;
+        Object.keys(need).forEach(function (name) {
+          n = Math.min(n, Math.floor((remaining[name] || 0) / need[name]));
+        });
+        if (n <= 0) return;
+        Object.keys(need).forEach(function (name) { remaining[name] -= need[name] * n; });
+        res.push({ set: s, count: n, each: Math.max(0, normal - setPrice(s)) });
+      });
+      return res;
+    }
+
+    function setDiscountTotal() {
+      return effectiveSets().reduce(function (sum, e) { return sum + e.each * e.count; }, 0);
+    }
+
+    function normalizeSets() {
+      var next = {};
+      effectiveSets().forEach(function (e) { next[e.set.name] = e.count; });
+      setsInCart = next;
+    }
+
+    function addSet(name) {
+      var s = null;
+      SETS.forEach(function (x) { if (x.name === name) s = x; });
+      if (!s || setNormal(s) === null) return;
+      s.items.forEach(function (n) { cart[n] = (cart[n] || 0) + 1; });
+      setsInCart[name] = (setsInCart[name] || 0) + 1;
+      pendingOrderId = null;
+      renderGrid();
+      renderCart();
+    }
+
+    function removeSet(name) {
+      var s = null;
+      SETS.forEach(function (x) { if (x.name === name) s = x; });
+      if (!s) return;
+      s.items.forEach(function (n) {
+        cart[n] = (cart[n] || 0) - 1;
+        if (cart[n] <= 0) delete cart[n];
+      });
+      setsInCart[name] = (setsInCart[name] || 0) - 1;
+      if (setsInCart[name] <= 0) delete setsInCart[name];
+      normalizeSets();
+      pendingOrderId = null;
+      renderGrid();
+      renderCart();
+    }
+
+    function renderSetGrid(grid) {
+      var counts = {};
+      effectiveSets().forEach(function (e) { counts[e.set.name] = e.count; });
+      SETS.forEach(function (s) {
+        var normal = setNormal(s);
+        var btn = document.createElement('button');
+        btn.className = 'prod-btn';
+        var qty = counts[s.name] || 0;
+        if (normal === null) {
+          btn.disabled = true;
+          btn.style.opacity = '.5';
+          btn.innerHTML = '<div>' + s.name + '</div><div class="price">商品未登録</div>';
+        } else {
+          btn.innerHTML = '<div>' + s.name + '</div><div class="price">' + yen(setPrice(s)) + '円（通常' + yen(normal) + '円）</div>' +
+            (qty > 0 ? '<div class="badge">' + qty + '</div>' : '');
+          btn.onclick = function () { addSet(s.name); };
+        }
+        grid.appendChild(btn);
+      });
+    }
+
     function renderGrid() {
       var grid = document.getElementById('grid');
       grid.innerHTML = '';
+      if (activeCategory === SET_TAB) { renderSetGrid(grid); return; }
       MENU.filter(function (p) { return p.category === activeCategory; }).forEach(function (p) {
         var btn = document.createElement('button');
         btn.className = 'prod-btn';
@@ -298,6 +395,7 @@
     function changeQty(name, delta) {
       cart[name] = (cart[name] || 0) + delta;
       if (cart[name] <= 0) delete cart[name];
+      if (delta < 0) normalizeSets();
       pendingOrderId = null;
       renderGrid();
       renderCart();
@@ -318,13 +416,30 @@
       return 0;
     }
 
+    // セット割引を引いたあとの金額に、クーポンを適用する
+    function afterSetTotal() {
+      return Math.max(0, cartTotal() - setDiscountTotal());
+    }
+
     function discountedTotal() {
-      var total = cartTotal();
+      var total = afterSetTotal();
       return Math.max(0, total - discountValue(total));
+    }
+
+    // 日報の「値引き」欄に入れる合計(セット割引+クーポン)
+    function totalDiscountAmount() {
+      return cartTotal() - discountedTotal();
     }
 
     function couponLabel(d) {
       return d === 'fixed100' ? 'クーポン100円引き' : d === 'percent10' ? 'クーポン10%引き' : '';
+    }
+
+    // 日報の備考に残す文言
+    function orderMemo() {
+      var parts = effectiveSets().map(function (e) { return e.set.name + (e.count > 1 ? '×' + e.count : ''); });
+      if (discount) parts.push(couponLabel(discount));
+      return parts.join(' / ');
     }
 
     function renderCoupon() {
@@ -334,7 +449,7 @@
       var disc = discountedTotal();
       document.getElementById('csAmount').textContent = yen(disc);
       var orig = document.getElementById('csOriginal');
-      if (discount && disc !== total) {
+      if (disc !== total) {
         orig.textContent = yen(total) + '円';
         orig.classList.add('show');
       } else {
@@ -366,11 +481,24 @@
           row.querySelector('[data-act="plus"]').onclick = function () { changeQty(name, 1); };
           list.appendChild(row);
         });
+        effectiveSets().forEach(function (e) {
+          var srow = document.createElement('div');
+          srow.className = 'cart-row';
+          srow.innerHTML =
+            '<span class="name">セット ' + e.set.name + '</span>' +
+            '<span class="qtybox"><span>×' + e.count + '</span><button data-act="rm">×</button></span>' +
+            '<span class="subtotal">−' + yen(e.each * e.count) + '円</span>';
+          srow.querySelector('[data-act="rm"]').onclick = function () { removeSet(e.set.name); };
+          list.appendChild(srow);
+        });
       }
-      if (names.length === 0) discount = null;
+      if (names.length === 0) { discount = null; setsInCart = {}; }
       var total = discountedTotal();
       document.getElementById('totalAmount').textContent = yen(total);
-      document.getElementById('totalLabel').textContent = discount ? '合計（' + couponLabel(discount) + '）' : '合計';
+      var labelParts = effectiveSets().length ? 'セット割引' : '';
+      document.getElementById('totalLabel').textContent = (discount || labelParts)
+        ? '合計（' + [labelParts, discount ? couponLabel(discount) : ''].filter(function (x) { return x; }).join('+') + '）'
+        : '合計';
       document.getElementById('confirmBtn').disabled = (names.length === 0);
     }
 
@@ -409,7 +537,8 @@
       var itemsText = Object.keys(cart).map(function (name) {
         return name + ' × ' + cart[name];
       }).join(' / ');
-      document.getElementById('csItems').textContent = itemsText;
+      var setText = effectiveSets().map(function (e) { return 'セット割引 ' + e.set.name + (e.count > 1 ? '×' + e.count : ''); }).join(' / ');
+      document.getElementById('csItems').textContent = itemsText + (setText ? ' ／ ' + setText : '');
       screen.classList.add('show');
     };
     document.getElementById('csCloseBtn').onclick = function () {
@@ -442,8 +571,8 @@
         eventName: channel === '出店' ? (document.getElementById('eventNameInput').value || '') : '',
         items: names.map(function (name) { return { name: name, qty: cart[name] }; }),
         payment: payment,
-        discountAmount: discountValue(cartTotal()),
-        memo: couponLabel(discount)
+        discountAmount: totalDiscountAmount(),
+        memo: orderMemo()
       };
 
       document.getElementById('confirmBtn').disabled = true;
@@ -454,6 +583,7 @@
         pendingOrderId = null;
         showToast('登録しました（合計 ' + yen(res.total) + '円）');
         cart = {};
+        setsInCart = {};
         discount = null;
         renderGrid();
         renderCart();
@@ -479,6 +609,8 @@
           MENU.forEach(function (p) {
             if (CATEGORIES.indexOf(p.category) === -1) CATEGORIES.push(p.category);
           });
+          SETS = res.sets || [];
+          if (SETS.length) CATEGORIES.push(SET_TAB);
           activeCategory = CATEGORIES[0] || '';
           document.getElementById('loading').style.display = 'none';
           document.getElementById('grid').style.display = 'grid';
