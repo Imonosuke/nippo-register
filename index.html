@@ -30,7 +30,13 @@
       background: var(--brown); color: #fff;
       padding: 10px 12px; flex-shrink: 0;
     }
-    #topbar h1 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+    #topbar h1 { margin: 0; font-size: 16px; font-weight: 600; }
+    .title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    #syncPill {
+      display: none; border: none; border-radius: 999px; padding: 4px 12px;
+      font-size: 12px; font-weight: 700; background: #ffb300; color: #3b2a00;
+    }
+    #syncPill.err { background: #e53935; color: #fff; }
     .channel-row { display: flex; gap: 8px; align-items: center; }
     .channel-toggle { display: flex; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,.5); }
     .channel-toggle button {
@@ -164,7 +170,10 @@
 <body>
   <div id="app">
     <div id="topbar">
-      <h1>日報レジ</h1>
+      <div class="title-row">
+        <h1>日報レジ</h1>
+        <button id="syncPill"></button>
+      </div>
       <div class="channel-row">
         <div class="channel-toggle">
           <button id="chStore" class="active">店頭</button>
@@ -240,19 +249,103 @@
       try { return localStorage.getItem('nippoKey') || window.__key || ''; } catch (e) { return window.__key || ''; }
     }
 
+    // 1回の送信。45秒たっても返事がなければ中断して通信エラー扱いにする(同じidで再送されるので二重登録にはならない)
     function apiSubmit(payload, id) {
       var url = API_URL + '?action=submit&key=' + encodeURIComponent(getKey()) +
         '&id=' + encodeURIComponent(id) + '&data=' + encodeURIComponent(JSON.stringify(payload));
-      return fetch(url).then(function (r) { return r.json(); });
+      var ctl = window.AbortController ? new AbortController() : null;
+      var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 45000);
+      return fetch(url, ctl ? { signal: ctl.signal } : undefined)
+        .then(function (r) { clearTimeout(timer); return r.json(); })
+        .catch(function (err) { clearTimeout(timer); throw err; });
     }
 
-    // 通信エラー時だけ1回だけ自動で再送する(同じidを使うのでサーバー側の重複防止が効く)
-    function apiSubmitWithRetry(payload, id) {
-      return apiSubmit(payload, id).catch(function () {
-        return new Promise(function (resolve) { setTimeout(resolve, 1500); })
-          .then(function () { return apiSubmit(payload, id); });
+    // ---- 送信キュー: 会計確定はすぐ完了表示にして、送信は裏で順番に行う。未送信分は端末に残る ----
+    var QUEUE_KEY = 'nippoQueue';
+    var MENU_CACHE_KEY = 'nippoMenuCache';
+    var queue = loadQueue();
+    var syncing = false;
+    var netWaiting = false;   // 直近の送信が通信エラーだったか
+    var retryDelay = 3000;
+    var retryTimer = null;
+
+    function loadQueue() {
+      try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]') || []; } catch (e) { return []; }
+    }
+    function saveQueue() {
+      try { localStorage.setItem(QUEUE_KEY, JSON.stringify(queue)); } catch (e) {}
+    }
+    function removeFromQueue(id) {
+      queue = queue.filter(function (q) { return q.id !== id; });
+      saveQueue();
+    }
+
+    function renderSync() {
+      var pill = document.getElementById('syncPill');
+      if (!queue.length) { pill.style.display = 'none'; return; }
+      var failed = queue.filter(function (q) { return q.failed; }).length;
+      var pending = queue.length - failed;
+      pill.style.display = 'inline-block';
+      if (failed) {
+        pill.className = 'err';
+        pill.textContent = '送信エラー ' + failed + '件（タップ）';
+      } else {
+        pill.className = '';
+        pill.textContent = netWaiting ? '未送信 ' + pending + '件（通信待ち）' : '送信中 ' + pending + '件';
+      }
+    }
+
+    function scheduleFlush(ms) {
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(flushQueue, ms);
+    }
+
+    function flushQueue() {
+      if (syncing || !getKey()) return;
+      var item = null;
+      for (var i = 0; i < queue.length; i++) { if (!queue[i].failed) { item = queue[i]; break; } }
+      if (!item) { renderSync(); return; }
+      syncing = true;
+      clearTimeout(retryTimer);
+      apiSubmit(item.payload, item.id).then(function (res) {
+        syncing = false;
+        netWaiting = false;
+        if (res.ok) {
+          retryDelay = 3000;
+          removeFromQueue(item.id);
+          renderSync();
+          flushQueue();
+          return;
+        }
+        if (res.error === 'BAD_KEY') { renderSync(); showKeyScreen('合言葉が違います'); return; }
+        item.tries = (item.tries || 0) + 1;
+        if (item.tries >= 3) { item.failed = true; item.error = res.error || '登録に失敗しました'; }
+        saveQueue();
+        renderSync();
+        scheduleFlush(2000);
+      }).catch(function () {
+        syncing = false;
+        netWaiting = true;
+        renderSync();
+        scheduleFlush(retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 30000);
       });
     }
+
+    document.getElementById('syncPill').onclick = function () {
+      var failed = queue.filter(function (q) { return q.failed; });
+      if (!failed.length) { retryDelay = 3000; flushQueue(); showToast('再送します'); return; }
+      var q = failed[0];
+      var desc = q.payload.items.map(function (i) { return i.name + '×' + i.qty; }).join(' / ');
+      if (confirm('送信できなかった注文があります（' + failed.length + '件）\n' + desc + '\nエラー: ' + q.error + '\n\n再送しますか？')) {
+        q.failed = false; q.tries = 0; saveQueue(); renderSync(); flushQueue();
+      } else if (confirm('この注文を破棄しますか？（日報には登録されません）')) {
+        removeFromQueue(q.id); renderSync();
+      }
+    };
+
+    window.addEventListener('online', function () { retryDelay = 3000; flushQueue(); });
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) flushQueue(); });
 
     function yen(n) { return Number(n || 0).toLocaleString('ja-JP'); }
 
@@ -564,61 +657,79 @@
       var total = discountedTotal();
       payment[payMethod] = total;
 
-      if (!pendingOrderId) pendingOrderId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-      var orderId = pendingOrderId;
+      var now = Date.now();
       var payload = {
         channel: channel,
         eventName: channel === '出店' ? (document.getElementById('eventNameInput').value || '') : '',
         items: names.map(function (name) { return { name: name, qty: cart[name] }; }),
         payment: payment,
         discountAmount: totalDiscountAmount(),
-        memo: orderMemo()
+        memo: orderMemo(),
+        ts: now
       };
 
-      document.getElementById('confirmBtn').disabled = true;
-      document.getElementById('confirmBtn').textContent = '登録中...';
-
-      apiSubmitWithRetry(payload, orderId).then(function (res) {
-        if (!res.ok) throw new Error(res.error || '登録に失敗しました');
-        pendingOrderId = null;
-        showToast('登録しました（合計 ' + yen(res.total) + '円）');
-        cart = {};
-        setsInCart = {};
-        discount = null;
-        renderGrid();
-        renderCart();
-        document.getElementById('customerScreen').classList.remove('show');
-        document.getElementById('confirmBtn').textContent = '会計確定';
-      }).catch(function (err) {
-        showToast('エラー: ' + err.message + '（通信を確認して再度押してください）', 8000);
-        document.getElementById('confirmBtn').disabled = false;
-        document.getElementById('confirmBtn').textContent = '会計確定';
-      });
+      // すぐ完了表示にして次の注文へ進み、送信は裏のキューで行う
+      queue.push({ id: now + '-' + Math.random().toString(36).slice(2, 8), payload: payload, tries: 0 });
+      saveQueue();
+      showToast('登録しました（合計 ' + yen(total) + '円）');
+      cart = {};
+      setsInCart = {};
+      discount = null;
+      pendingOrderId = null;
+      renderGrid();
+      renderCart();
+      document.getElementById('customerScreen').classList.remove('show');
+      renderSync();
+      flushQueue();
     };
 
+    function applyMenu(menu, sets) {
+      MENU = menu;
+      CATEGORIES = [];
+      MENU.forEach(function (p) {
+        if (CATEGORIES.indexOf(p.category) === -1) CATEGORIES.push(p.category);
+      });
+      SETS = sets || [];
+      if (SETS.length) CATEGORIES.push(SET_TAB);
+      if (CATEGORIES.indexOf(activeCategory) === -1) activeCategory = CATEGORIES[0] || '';
+      // メニューから消えた商品がカートに残っていたら外す
+      Object.keys(cart).forEach(function (n) { if (!findProduct(n)) delete cart[n]; });
+      normalizeSets();
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('grid').style.display = 'grid';
+      renderTabs();
+      renderGrid();
+      renderCart();
+    }
+
+    // 前回のメニューを端末に覚えておき、すぐ表示してから最新を裏で取得する
     function loadMenu() {
+      var cachedText = null;
+      try { cachedText = localStorage.getItem(MENU_CACHE_KEY); } catch (e) {}
+      var shown = false;
+      if (cachedText) {
+        try {
+          var cached = JSON.parse(cachedText);
+          if (cached && cached.menu && cached.menu.length) { applyMenu(cached.menu, cached.sets); shown = true; }
+        } catch (e) {}
+      }
       fetch(API_URL + '?action=menu&key=' + encodeURIComponent(getKey()))
         .then(function (r) { return r.json(); })
         .then(function (res) {
           if (!res.ok) {
-            if (res.error === 'BAD_KEY') { showKeyScreen('合言葉が違います'); return; }
+            if (res.error === 'BAD_KEY') {
+              try { localStorage.removeItem(MENU_CACHE_KEY); } catch (e) {}
+              showKeyScreen('合言葉が違います');
+              return;
+            }
             throw new Error(res.error);
           }
-          MENU = res.menu;
-          CATEGORIES = [];
-          MENU.forEach(function (p) {
-            if (CATEGORIES.indexOf(p.category) === -1) CATEGORIES.push(p.category);
-          });
-          SETS = res.sets || [];
-          if (SETS.length) CATEGORIES.push(SET_TAB);
-          activeCategory = CATEGORIES[0] || '';
-          document.getElementById('loading').style.display = 'none';
-          document.getElementById('grid').style.display = 'grid';
-          renderTabs();
-          renderGrid();
-          renderCart();
+          var freshText = JSON.stringify({ menu: res.menu, sets: res.sets || [] });
+          try { localStorage.setItem(MENU_CACHE_KEY, freshText); } catch (e) {}
+          if (!shown || freshText !== cachedText) applyMenu(res.menu, res.sets);
         })
         .catch(function (err) {
+          if (shown) { showToast('通信できないため前回のメニューで表示しています', 3000); return; }
           var l = document.getElementById('loading');
           l.style.display = 'block';
           l.innerHTML = '読み込みエラー: ' + err.message + '<br><br><button onclick="location.reload()">再読み込み</button>';
@@ -635,9 +746,11 @@
       try { localStorage.setItem('nippoKey', v); } catch (e) { window.__key = v; }
       document.getElementById('keyScreen').classList.remove('show');
       loadMenu();
+      flushQueue();
     };
 
-    if (getKey()) loadMenu(); else showKeyScreen('');
+    renderSync();
+    if (getKey()) { loadMenu(); flushQueue(); } else showKeyScreen('');
   </script>
 </body>
 </html>
